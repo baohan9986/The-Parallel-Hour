@@ -40,7 +40,23 @@ async function fetchUniverseText() {
     let m = nf(minute(), 2);
     let timeStr = `${hour12}:${m}${ampm}`;
 
-    const prompt = `The current time is ${timeStr}. Imagine a parallel-universe version of me. Requirements: 1. Under 10 words. 2. Strict format: "${timeStr}, [Who] [doing what] [where]". 3. "Who" should randomly alternate between very ordinary, everyday jobs (e.g., teacher, barista, accountant) and highly niche, unusual, or interesting professions (e.g., ghost hunter, deep-sea welder, clockmaker). 4. The action and location must logically fit the current time. Be completely different every time. English only.`;
+    // 在获取新文本前，先重置为加载状态，防止用户拉出太快看到旧文本
+    currentUniverseText = `${timeStr}, CONNECTING TO MULTIVERSE...`;
+
+    // 随机抽取一个主题领域，强制 AI 每次都在完全不同的领域里生成，避免重复
+    const domains = [
+        "cyberpunk/hacker", "culinary/kitchen", "deep sea/ocean", "space/sci-fi",
+        "mundane office/corporate", "occult/paranormal", "heavy industry/construction",
+        "fine arts/music", "espionage/spy", "wilderness/survival",
+        "medical/hospital", "retail/customer service", "historical/ancient",
+        "aviation/flying", "underground/subway", "nightlife/club",
+        "agriculture/farming", "law enforcement/security", "circus/carnival"
+    ];
+    const randomDomain = domains[Math.floor(Math.random() * domains.length)];
+
+    // 加上时间戳和随机数，强迫 OpenAI 每次都把它当成一个全新的请求，避免缓存
+    const uniqueId = Date.now() + "-" + Math.floor(Math.random() * 10000);
+    const prompt = `The current time is ${timeStr}. Imagine a parallel-universe version of me. Requirements: 1. Under 10 words. 2. Strict format: "${timeStr}, [Who] [doing what] [where]". 3. The profession, action, and location MUST be strictly themed around this specific domain: "${randomDomain}". 4. The action must logically fit the current time. NEVER use libraries, librarians, or reading books. Be completely different every time. English only. [ID: ${uniqueId}]`;
 
     try {
         const res = await fetch("/api/universe-text", {
@@ -350,16 +366,11 @@ function draw() {
     // 当拉出距离超过一定阈值时，标记为已拉出
     if (currentValue > 300) {
         hasPulled = true;
-    } 
+    }
     // 当拉出后又收回（小于一定阈值），且之前拉出过，则重新获取新文本
     else if (currentValue < 50 && hasPulled) {
         hasPulled = false;
         fetchUniverseText();
-    }
-
-    const debugEl = document.getElementById("debug-val");
-    if (debugEl) {
-        debugEl.innerText = `Current Value: ${currentValue.toFixed(1)}`;
     }
 
     let maxIdx = animationFrames.length - 1;
@@ -495,12 +506,13 @@ function draw() {
     // 当传入数据到达470时，文字块从左边被拉出到中间
     if (currentValue >= 450) {
         let txt = currentUniverseText;
-        
-        // 映射 currentValue (470 -> 500) 到 X 坐标 (从屏幕左侧外 -> 屏幕中间)
+
+        // 映射 currentValue (470 -> 500) 到 X 坐标 (从屏幕左侧外 -> 屏幕中间偏右)
         // 稍微提前一点开始动画，比如从 450 开始，这样 470 的时候已经能看到一部分
-        let textX = map(currentValue, 450, 500, -width * 0.5, width / 2, true);
+        // 往右边放一点，所以终点改为 width / 2 + 80 (可以根据需要调整 80 这个数值)
+        let textX = map(currentValue, 450, 500, -width * 0.5, width / 2 + 320, true);
         let textY = height / 2;
-        
+
         let textAlpha = map(currentValue, 460, 480, 0, 255, true);
 
         textSize(36);
@@ -509,22 +521,52 @@ function draw() {
         fill(`rgba(230, 57, 70, ${textAlpha / 255})`);
         noStroke();
 
-        // 尝试将文字按逗号分两行（时间一行，动作一行）
+        // 尝试将文字分四行 (第一行时间，后面三行字数尽量平均)
         let commaIndex = txt.indexOf(',');
         let line1 = txt;
         let line2 = "";
+        let line3 = "";
+        let line4 = "";
+
         if (commaIndex !== -1) {
-            line1 = txt.substring(0, commaIndex + 1).trim();
-            line2 = txt.substring(commaIndex + 1).trim();
+            line1 = txt.substring(0, commaIndex + 1).trim(); // 第一行：时间
+            let rest = txt.substring(commaIndex + 1).trim();
+            let words = rest.split(' ').filter(w => w.length > 0);
+
+            if (words.length >= 3) {
+                // 将剩下的单词尽量平均分成三份
+                let n = words.length;
+                let p1 = Math.ceil(n / 3);
+                let p2 = Math.ceil((n - p1) / 2);
+
+                line2 = words.slice(0, p1).join(' ');
+                line3 = words.slice(p1, p1 + p2).join(' ');
+                line4 = words.slice(p1 + p2).join(' ');
+            } else if (words.length === 2) {
+                line2 = words[0];
+                line3 = words[1];
+            } else {
+                line2 = rest;
+            }
         }
 
         push();
         translate(textX, textY);
-        
-        // 绘制两行居中的文字
-        if (line2 !== "") {
-            text(line1, 0, -25);
-            text(line2, 0, 25);
+
+        // 绘制四行居中的文字，行间距稍微大一点 (比如 55)
+        let spacing = 65;
+        if (line4 !== "") {
+            text(line1, 0, -spacing * 1.5);
+            text(line2, 0, -spacing * 0.5);
+            text(line3, 0, spacing * 0.5);
+            text(line4, 0, spacing * 1.5);
+        } else if (line3 !== "") {
+            text(line1, 0, -spacing);
+            text(line2, 0, 0);
+            text(line3, 0, spacing);
+        } else if (line2 !== "") {
+            text(line1, 0, -spacing / 2);
+            text(line2, 0, spacing / 2);
         } else {
             text(line1, 0, 0);
         }

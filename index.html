@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Interactive Yarn Clock</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background-color: #f9f9f9;
+      font-family: sans-serif;
+    }
+
+    #ui-layer {
+      position: absolute;
+      top: 15px;
+      left: 15px;
+      pointer-events: none;
+      z-index: 10;
+    }
+
+    #status {
+      font-size: 14px;
+      color: #666;
+      font-weight: bold;
+      margin-bottom: 5px;
+    }
+
+    #debug-val {
+      font-size: 14px;
+      color: #333;
+    }
+  </style>
+</head>
+<body>
+  <div id="ui-layer">
+    <div id="status">Status: Disconnected (Click to Connect Serial)</div>
+    <div id="debug-val">Current Value: 0.0</div>
+  </div>
+
+  <script src="sketch.js"></script>
+</body>
+</html>

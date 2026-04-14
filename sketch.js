@@ -86,10 +86,14 @@ async function fetchUniverseText() {
 
 function setup() {
     createCanvas(windowWidth, windowHeight);
+    pixelDensity(1); // 强制像素密度为1，极大降低树莓派的 GPU 渲染压力
     pullPoint = createVector(width * 0.5, height + 100);
     lastMinute = minute();
     initYarn();
     fetchUniverseText();
+
+    // 尝试自动连接之前已经授权过的串口设备
+    autoConnectSerial();
 }
 
 function initYarn() {
@@ -178,7 +182,7 @@ function initYarn() {
         rawPoints.push([bx, by]);
     }
 
-    let spacing = 6;
+    let spacing = 12; // 将采样间距从 6 增加到 12，粒子数量减半，计算量降低 75%
     let sampled = resamplePath(rawPoints, spacing);
 
     for (let pt of sampled) {
@@ -315,7 +319,7 @@ function physicsStep() {
         }
     }
 
-    let iterations = 80;
+    let iterations = 30; // 将物理迭代次数从 80 降低到 30，大幅减少 CPU 计算量
     for (let i = 0; i < iterations; i++) {
         for (let s of segments) {
             let dx = s.p2.x - s.p1.x;
@@ -507,15 +511,16 @@ function draw() {
     if (currentValue >= 450) {
         let txt = currentUniverseText;
 
-        // 映射 currentValue (470 -> 500) 到 X 坐标 (从屏幕左侧外 -> 屏幕中间偏右)
-        // 稍微提前一点开始动画，比如从 450 开始，这样 470 的时候已经能看到一部分
-        // 往右边放一点，所以终点改为 width / 2 + 80 (可以根据需要调整 80 这个数值)
-        let textX = map(currentValue, 450, 500, -width * 0.5, width / 2 + 320, true);
+        // 映射 currentValue (470 -> 500) 到 X 坐标 (从屏幕左侧外 -> 屏幕右侧)
+        // 使用 width * 0.75 (屏幕宽度的 75% 处) 来代替绝对数值，这样无论屏幕多大，文字都会自适应靠右，且不会超出屏幕
+        let textX = map(currentValue, 450, 500, -width * 0.5, width * 0.72, true);
         let textY = height / 2;
 
         let textAlpha = map(currentValue, 460, 480, 0, 255, true);
 
-        textSize(36);
+        // 根据屏幕宽度自适应计算字体大小，最小 14，最大 48
+        let responsiveTextSize = constrain(width * 0.025, 14, 48);
+        textSize(responsiveTextSize);
         textStyle(BOLD);
         textAlign(CENTER, CENTER);
         fill(`rgba(230, 57, 70, ${textAlpha / 255})`);
@@ -553,8 +558,8 @@ function draw() {
         push();
         translate(textX, textY);
 
-        // 绘制四行居中的文字，行间距稍微大一点 (比如 55)
-        let spacing = 65;
+        // 绘制四行居中的文字，行间距根据字体大小自适应
+        let spacing = responsiveTextSize * 1.8;
         if (line4 !== "") {
             text(line1, 0, -spacing * 1.5);
             text(line2, 0, -spacing * 0.5);
@@ -580,12 +585,45 @@ function draw() {
     strokeCap(ROUND);
 
     beginShape();
+    // 使用 curveVertex 让线条在采样点较少的情况下依然保持平滑
+    if (currentFrameData.length >= 2) {
+        curveVertex(currentFrameData[0], currentFrameData[1]); // 起点控制点
+    }
     for (let i = 0; i < currentFrameData.length; i += 2) {
         let px = currentFrameData[i];
         let py = currentFrameData[i + 1];
-        vertex(px, py);
+        curveVertex(px, py);
+    }
+    if (currentFrameData.length >= 2) {
+        curveVertex(currentFrameData[currentFrameData.length - 2], currentFrameData[currentFrameData.length - 1]); // 终点控制点
     }
     endShape();
+}
+
+async function autoConnectSerial() {
+    if (!navigator.serial) return;
+    try {
+        // 获取之前已经授权过的串口设备
+        const ports = await navigator.serial.getPorts();
+        if (ports.length > 0) {
+            port = ports[0]; // 自动选择第一个已授权设备
+            await port.open({ baudRate: 115200 });
+            const decoder = new TextDecoderStream();
+            port.readable.pipeTo(decoder.writable);
+            reader = decoder.readable.getReader();
+            connected = true;
+
+            const statusEl = document.getElementById("status");
+            if (statusEl) {
+                statusEl.innerText = "Status: Serial Auto-Connected!";
+                statusEl.style.color = "green";
+            }
+
+            readSerialLoop();
+        }
+    } catch (e) {
+        console.error("Auto-connect error: ", e);
+    }
 }
 
 async function mousePressed() {

@@ -13,6 +13,7 @@ let targetValue = 0;
 let currentValue = 0;
 let hasPulled = false; // 记录是否已经拉出过
 let isFetching = false; // 记录是否正在请求数据
+let pendingMinuteUpdate = false; // 记录是否在拉出期间发生了分钟变化
 
 // 当前平行宇宙文本
 let currentUniverseText = "CONNECTING TO MULTIVERSE...";
@@ -86,13 +87,11 @@ async function fetchUniverseText() {
 
 function setup() {
     createCanvas(windowWidth, windowHeight);
-    pixelDensity(1); // 强制像素密度为1，极大降低树莓派的 GPU 渲染压力
+    pixelDensity(1);
     pullPoint = createVector(width * 0.5, height + 100);
     lastMinute = minute();
     initYarn();
     fetchUniverseText();
-
-    // 尝试自动连接之前已经授权过的串口设备
     autoConnectSerial();
 }
 
@@ -355,8 +354,14 @@ function draw() {
 
     if (minute() !== lastMinute) {
         lastMinute = minute();
-        initYarn();
-        fetchUniverseText();
+        // 如果当前文字没有被拉出（在屏幕外，< 470），直接更新
+        if (currentValue < 470) {
+            initYarn();
+            fetchUniverseText();
+        } else {
+            // 否则，标记为待更新，等收回后再更新，防止文字在屏幕上突然变化
+            pendingMinuteUpdate = true;
+        }
     }
 
     if (animationFrames.length === 0) return;
@@ -367,14 +372,21 @@ function draw() {
 
     currentValue = lerp(currentValue, targetValue, 0.08);
 
-    // 当拉出距离超过一定阈值时，标记为已拉出
-    if (currentValue > 300) {
+    // 当文字被完全拉出时，标记为已拉出
+    if (currentValue >= 470) {
         hasPulled = true;
     }
-    // 当拉出后又收回（小于一定阈值），且之前拉出过，则重新获取新文本
-    else if (currentValue < 50 && hasPulled) {
-        hasPulled = false;
-        fetchUniverseText();
+    // 当文字被放回到屏幕外（小于 470）
+    else if (currentValue < 470) {
+        // 如果之前拉出过，或者在拉出期间分钟发生了变化，则收回后立刻更新
+        if (hasPulled || pendingMinuteUpdate) {
+            if (pendingMinuteUpdate) {
+                initYarn(); // 更新红线上的时间
+            }
+            hasPulled = false;
+            pendingMinuteUpdate = false;
+            fetchUniverseText(); // 获取新文本
+        }
     }
 
     let maxIdx = animationFrames.length - 1;
@@ -389,7 +401,7 @@ function draw() {
     let tx = currentFrameData[0];
     let ty = currentFrameData[1];
 
-    let numRibbons = 20;
+    let numRibbons = 5; // 增加线条数量来构建虫洞网格
 
     let pullDist = dist(startX, startY, tx, ty);
     let pullFactor = constrain(pullDist / 400, 0, 1);
@@ -408,21 +420,70 @@ function draw() {
     let dirX = tLen > 0 ? (nextX - tx) / tLen : 1;
     let dirY = tLen > 0 ? (nextY - ty) / tLen : 0;
 
+    // 当文字开始出现时，主红线比细红线晚一点消失 (比如 475~500)
+    let mainLineAlpha = map(currentValue, 475, 500, 255, 0, true);
+
+    // 计算文字的移动轨迹 (470 到 490 时，从左侧屏幕外滑入到屏幕正中间)
+    let centerLerp = map(currentValue, 470, 490, 0, 1, true);
+    let easeLerp = centerLerp < 0.5 ? 2 * centerLerp * centerLerp : 1 - Math.pow(-2 * centerLerp + 2, 2) / 2;
+
+    // 文字从最左侧（主红线最原始的起点）滑向屏幕中间
+    let textX = lerp(startX, width / 2, easeLerp);
+    let textY = lerp(startY, height / 2, easeLerp);
+
+    // 计算主红线被拉直的进度 (470 到 485)
+    let tautLerp = map(currentValue, 470, 485, 0, 1, true);
+    let tautEase = tautLerp < 0.5 ? 2 * tautLerp * tautLerp : 1 - Math.pow(-2 * tautLerp + 2, 2) / 2;
+
+    // 计算整根红线（包括主线）掉入洞里的进度 (485 到 500)
+    let lineDropLerp = map(currentValue, 485, 500, 0, 1, true);
+    let dropEase = lineDropLerp * lineDropLerp; // 二次方加速掉落
+
+    // 定义底部吸入的“洞口”位置
+    let holeX = width / 2;
+    let holeY = height + 300;
+
+    // 物理红线的顶部端点：先跟着文字，然后掉进洞里
+    let stringTopX = lerp(textX, holeX, dropEase);
+    let stringTopY = lerp(textY, holeY, dropEase);
+
+    // 获取原始物理坐标
+    let rawPhysX = currentFrameData.length >= 2 ? currentFrameData[0] : 0;
+    let rawPhysY = currentFrameData.length >= 2 ? currentFrameData[1] : height / 2;
+    let rawNextPhysX = currentFrameData.length >= 4 ? currentFrameData[2] : rawPhysX;
+    let rawNextPhysY = currentFrameData.length >= 4 ? currentFrameData[3] : rawPhysY + 10;
+
+    // 物理线目标大弧度曲线的控制点：制造一个极度平滑的“U”型悬垂大肚，消除S型扭曲
+    let physTargetCx1 = stringTopX;
+    let physTargetCy1 = stringTopY + (holeY - stringTopY) * 0.85;
+    let physTargetCx2 = holeX;
+    let physTargetCy2 = stringTopY + (holeY - stringTopY) * 0.85;
+
+    // 物理线当前的真实起点 (先变直，再掉落)
+    let currentPhysX = lerp(rawPhysX, stringTopX, tautEase);
+    let currentPhysY = lerp(rawPhysY, stringTopY, tautEase);
+
+    // 物理线当前的第二个点 (用于计算切线，消除折角)
+    let t_next = 2 / Math.max(currentFrameData.length, 2);
+    let targetNextX = bezierPoint(stringTopX, physTargetCx1, physTargetCx2, holeX, t_next);
+    let targetNextY = bezierPoint(stringTopY, physTargetCy1, physTargetCy2, holeY, t_next);
+    let currentNextPhysX = lerp(rawNextPhysX, targetNextX, tautEase);
+    let currentNextPhysY = lerp(rawNextPhysY, targetNextY, tautEase);
+
     for (let i = 0; i < numRibbons; i++) {
         let isLongest = i === 0;
 
         let alpha = 255;
         if (!isLongest) {
-            // 让细红线早点出现
-            let fadeInStart = 400 + (i % 5) * 4;
-            let fadeInEnd = 430 + (i % 5) * 4;
+            // 让细红线晚一点出现，快拉到文字出来前才散开
+            let fadeInStart = 430;
+            let fadeInEnd = 440;
             let fadeInAlpha = map(currentValue, fadeInStart, fadeInEnd, 0, 255, true);
 
-            // 当文字开始出现时 (450~480)，细红线慢慢消失到 0
-            let fadeOutStart = 450 + (i % 3) * 5;
-            let fadeOutEnd = 480 + (i % 3) * 5;
-            let minAlpha = 0;
-            let fadeOutAlpha = map(currentValue, fadeOutStart, fadeOutEnd, 255, minAlpha, true);
+            // 当文字开始出现时 (450~470)，细红线慢慢消失到 0
+            let fadeOutStart = 450;
+            let fadeOutEnd = 470;
+            let fadeOutAlpha = map(currentValue, fadeOutStart, fadeOutEnd, 255, 0, true);
 
             alpha = Math.min(fadeInAlpha, fadeOutAlpha);
         }
@@ -443,62 +504,69 @@ function draw() {
         let baseCy2 = lerp(startY, targetCy2, pullFactor);
 
         if (isLongest) {
-            sX = startX;
-            sY = startY;
-            endX = tx;
-            endY = ty;
-            cx1 = baseCx1;
-            cy1 = baseCy1;
-            cx2 = baseCx2;
-            cy2 = baseCy2;
+            // 主延长线：连接文字和物理红线当前的起点
+            // 当线掉落时，它的起点跟着 stringTopX/Y 一起掉进洞里，完美模拟线从文字上脱落
+            sX = stringTopX;
+            sY = stringTopY;
+            endX = currentPhysX;
+            endY = currentPhysY;
+
+            // 计算物理线在连接处的切线方向，确保主延长线和物理线完美相切
+            let dx = currentNextPhysX - currentPhysX;
+            let dy = currentNextPhysY - currentPhysY;
+            let len = dist(0, 0, dx, dy);
+            if (len > 0) { dx /= len; dy /= len; } else { dx = 0; dy = 1; }
+
+            let distRibbon = dist(sX, sY, endX, endY);
+
+            // 目标控制点：制造一个向左侧饱满凸出的大 C 型弧线，让下落过程极其舒展
+            let arcCx1 = sX - distRibbon * 0.6; // 向左凸出，形成大弧度
+            let arcCy1 = sY + distRibbon * 0.4;
+            
+            // cx1 平滑过渡到大弧线控制点
+            cx1 = lerp(baseCx1, arcCx1, tautEase);
+            cy1 = lerp(baseCy1, arcCy1, tautEase);
+            
+            // 核心修复：cx2 绝对锁定在物理线的切线反方向上，保证数学上的绝对相切（C1连续）
+            let baseDist = dist(endX, endY, baseCx2, baseCy2);
+            // 增加控制柄长度 (0.8)，让切线处的弧度更大、更平滑，彻底消除折角感
+            let currentDist = lerp(baseDist, distRibbon * 0.8, tautEase); 
+            cx2 = endX - dx * currentDist;
+            cy2 = endY - dy * currentDist;
+
+            // 当线掉落时，连接线不再通过透明度消失，而是跟着物理线一起往下掉
+            // 我们保持它的透明度为 255（不透明）
+            alpha = 255;
         } else {
+            // 有机波浪/散开的丝线效果 (参考提供的图片)
             let chaoticOffset = sin(i * 13.7);
             let chaoticOffset2 = cos(i * 29.3);
+            let chaoticOffset3 = sin(i * 41.1);
 
+            // 让线条在 Y 轴上散开，作为基础分布
+            let ySpread = map(i, 1, numRibbons - 1, -height * 0.8, height * 0.8);
+
+            // 起点：在左侧散开，减小错落的幅度，显得更柔和
+            sX = startX - width * 0.05 + chaoticOffset * width * 0.1 * pullFactor;
+            sY = startY + ySpread + chaoticOffset2 * height * 0.1;
+
+            // 终点：全部汇聚到文字出现的位置（奇点）
             endX = tx;
             endY = ty;
 
-            let type = i % 6;
+            // 控制点 1（左半段散开部分）：减小波动的幅度，让线条更平滑、优雅地交织
+            cx1 = baseCx1 - width * 0.05 + chaoticOffset3 * width * 0.1 * pullFactor;
+            cy1 = baseCy1 + ySpread * 0.7 + chaoticOffset * height * 0.15;
 
-            if (type === 0) {
-                sX = startX - width * 0.1 + chaoticOffset * width * 0.2;
-                sY = -height * 0.4 + chaoticOffset2 * 150;
-                cx1 = baseCx1 - width * 0.3 * pullFactor;
-                cy1 = baseCy1 - height * 0.9 * pullFactor;
-            } else if (type === 1) {
-                sX = startX - width * 0.1 + chaoticOffset * width * 0.2;
-                sY = height * 1.4 + chaoticOffset2 * 150;
-                cx1 = baseCx1 - width * 0.3 * pullFactor;
-                cy1 = baseCy1 + height * 0.9 * pullFactor;
-            } else if (type === 2) {
-                sX = -width * 0.3 + chaoticOffset * 200;
-                sY = startY + chaoticOffset2 * height * 0.8;
-                cx1 = baseCx1 - width * 0.6 * pullFactor;
-                cy1 = baseCy1 + chaoticOffset * height * 0.5;
-            } else if (type === 3) {
-                sX = (i % 2 === 0) ? -width * 0.2 : startX - width * 0.3;
-                sY = (i % 2 === 0) ? -height * 0.3 : height * 1.3;
-                cx1 = baseCx1 - width * 0.5 * pullFactor;
-                cy1 = baseCy1 + (i % 2 === 0 ? -height * 0.8 : height * 0.8);
-            } else if (type === 4) {
-                sX = width * 1.2 + chaoticOffset * width * 0.3;
-                sY = -height * 0.2 + chaoticOffset2 * height * 0.5;
-                cx1 = baseCx1 + width * 0.6 * pullFactor;
-                cy1 = baseCy1 - height * 0.8 * pullFactor;
-            } else {
-                sX = width * 1.3 + chaoticOffset2 * width * 0.3;
-                sY = height * 1.2 + chaoticOffset * height * 0.4;
-                cx1 = baseCx1 + width * 0.7 * pullFactor;
-                cy1 = baseCy1 + height * 0.8 * pullFactor;
-            }
-
-            let bundleSpread = distC2 + (15 + chaoticOffset * 10) * i;
-            cx2 = tx - dirX * bundleSpread;
-            cy2 = ty - dirY * bundleSpread;
+            // 控制点 2（右半段聚拢部分）：把控制点稍微往左拉一点，让汇聚的过渡更加平缓自然
+            cx2 = baseCx2 - width * 0.15 * pullFactor;
+            cy2 = baseCy2 + ySpread * 0.08 * chaoticOffset2;
         }
 
         noFill();
-        strokeWeight(isLongest ? 4.5 : 2.5);
+        strokeWeight(isLongest ? 4 : 3.5); // 强制主延长线和物理线粗细完全一致(4)，消除接缝视觉差
+        strokeCap(ROUND);
+        strokeJoin(ROUND);
         stroke(`rgba(230, 57, 70, ${alpha / 255})`);
 
         beginShape();
@@ -508,15 +576,10 @@ function draw() {
     }
 
     // 当传入数据到达470时，文字块从左边被拉出到中间
-    if (currentValue >= 450) {
+    if (currentValue >= 470) {
         let txt = currentUniverseText;
 
-        // 映射 currentValue (470 -> 500) 到 X 坐标 (从屏幕左侧外 -> 屏幕右侧)
-        // 使用 width * 0.75 (屏幕宽度的 75% 处) 来代替绝对数值，这样无论屏幕多大，文字都会自适应靠右，且不会超出屏幕
-        let textX = map(currentValue, 450, 500, -width * 0.5, width * 0.72, true);
-        let textY = height / 2;
-
-        let textAlpha = map(currentValue, 460, 480, 0, 255, true);
+        let textAlpha = map(currentValue, 470, 485, 0, 255, true);
 
         // 根据屏幕宽度自适应计算字体大小，最小 14，最大 48
         let responsiveTextSize = constrain(width * 0.025, 14, 48);
@@ -539,14 +602,30 @@ function draw() {
             let words = rest.split(' ').filter(w => w.length > 0);
 
             if (words.length >= 3) {
-                // 将剩下的单词尽量平均分成三份
-                let n = words.length;
-                let p1 = Math.ceil(n / 3);
-                let p2 = Math.ceil((n - p1) / 2);
+                // 将剩下的单词按字母长度尽量平均分成三行，使视觉宽度更平衡
+                let totalLen = rest.length;
+                let targetLen = totalLen / 3;
+                let currentLen = 0;
+                let parts = [[], [], []];
+                let pIdx = 0;
 
-                line2 = words.slice(0, p1).join(' ');
-                line3 = words.slice(p1, p1 + p2).join(' ');
-                line4 = words.slice(p1 + p2).join(' ');
+                for (let i = 0; i < words.length; i++) {
+                    let w = words[i];
+                    // 如果当前行加上这个单词的一半长度超过了目标长度，并且当前行已经有单词了，就换行
+                    if (pIdx < 2 && currentLen + w.length / 2 > targetLen && parts[pIdx].length > 0) {
+                        pIdx++;
+                        currentLen = 0;
+                        // 重新计算剩余部分的目标长度
+                        let remainingWords = words.slice(i).join(' ').length;
+                        targetLen = remainingWords / (3 - pIdx);
+                    }
+                    parts[pIdx].push(w);
+                    currentLen += w.length + 1; // +1 是为了算上空格
+                }
+
+                line2 = parts[0].join(' ');
+                line3 = parts[1].join(' ');
+                line4 = parts[2].join(' ');
             } else if (words.length === 2) {
                 line2 = words[0];
                 line3 = words[1];
@@ -556,10 +635,15 @@ function draw() {
         }
 
         push();
-        translate(textX, textY);
+        let spacing = responsiveTextSize * 1.8;
+
+        // 490到495之间，文字向下平滑移动到屏幕绝对正中间，速度更快
+        let textDropOffset = map(currentValue, 490, 495, spacing * 2.5, 0, true);
+
+        // 将文字向上偏移，使其正好坐在剩余主红线的顶端，然后在最后阶段滑到正中间
+        translate(textX, textY - textDropOffset);
 
         // 绘制四行居中的文字，行间距根据字体大小自适应
-        let spacing = responsiveTextSize * 1.8;
         if (line4 !== "") {
             text(line1, 0, -spacing * 1.5);
             text(line2, 0, -spacing * 0.5);
@@ -578,24 +662,33 @@ function draw() {
         pop();
     }
 
+    // 绘制物理主红线
     noFill();
-    stroke("#e63946");
+    // 物理红线也不再通过透明度消失，保持不透明
+    stroke(`rgba(230, 57, 70, 1)`);
     strokeWeight(4);
     strokeJoin(ROUND);
     strokeCap(ROUND);
 
     beginShape();
-    // 使用 curveVertex 让线条在采样点较少的情况下依然保持平滑
     if (currentFrameData.length >= 2) {
-        curveVertex(currentFrameData[0], currentFrameData[1]); // 起点控制点
-    }
-    for (let i = 0; i < currentFrameData.length; i += 2) {
-        let px = currentFrameData[i];
-        let py = currentFrameData[i + 1];
-        curveVertex(px, py);
-    }
-    if (currentFrameData.length >= 2) {
-        curveVertex(currentFrameData[currentFrameData.length - 2], currentFrameData[currentFrameData.length - 1]); // 终点控制点
+        for (let i = 0; i < currentFrameData.length; i += 2) {
+            let px = currentFrameData[i];
+            let py = currentFrameData[i + 1];
+
+            // 目标是一根从文字自然下垂的大弧度平滑曲线
+            let t = i / currentFrameData.length;
+            let targetX = bezierPoint(stringTopX, physTargetCx1, physTargetCx2, holeX, t);
+            let targetY = bezierPoint(stringTopY, physTargetCy1, physTargetCy2, holeY, t);
+
+            // 逐渐变直且平滑
+            px = lerp(px, targetX, tautEase);
+            py = lerp(py, targetY, tautEase);
+
+            if (i === 0) curveVertex(px, py); // 起点控制点
+            curveVertex(px, py);
+            if (i === currentFrameData.length - 2) curveVertex(px, py); // 终点控制点
+        }
     }
     endShape();
 }

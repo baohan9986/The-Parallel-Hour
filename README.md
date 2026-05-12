@@ -1,1 +1,5 @@
+Parallel Hour is an interactive installation that explores how a simple physical gesture can reshape our perception of time and self. By pulling a real string, users physically engage with a digital timeline rendered as a continuous red line representing the present moment. As the line is pulled, it begins to unravel, splitting into multiple parallel paths that suggest alternate versions of the same moment. These branching lines briefly coexist before collapsing, leaving a single remaining path—an imagined reality chosen from many possibilities. Along this selected line, a short AI-generated text appears, describing what a parallel version of the user might be doing at that exact time. This moment transforms an abstract system into a personal and speculative reflection, connecting physical action with narrative imagination. Combining tangible interaction, generative visuals, and real-time text, Parallel Hour invites users to reconsider the present not as a fixed state, but as one of many possible versions unfolding simultaneously.
+
+ESP32, string encoder, Raspberry Pi, JavaScript, OpenAI API
+
 https://www.hanbao.works/work/parallel-hour
